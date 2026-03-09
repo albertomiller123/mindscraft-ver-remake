@@ -558,6 +558,7 @@ export async function collectBlock(bot, blockType, num = 1, exclude = null) {
             break;
     }
     log(bot, `Collected ${collected} ${blockType}.`);
+    await pickupNearbyItems(bot);
     return collected > 0;
 }
 

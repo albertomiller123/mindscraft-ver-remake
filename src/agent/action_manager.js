@@ -11,22 +11,37 @@ export class ActionManager {
         this.recent_action_counter = 0;
         this.last_resume_time = 0;
         this.recent_resume_counter = 0;
+        this.currentActionProtected = false; // Flag to prevent interruptions during critical tasks
     }
 
     async resumeAction(actionFn, timeout) {
         return this._executeResume(actionFn, timeout);
     }
 
-    async runAction(actionLabel, actionFn, { timeout, resume = false } = {}) {
+    async runAction(actionLabel, actionFn, { timeout, resume = false, protectedAction = false, forceInterrupt = false } = {}) {
         if (resume) {
-            return this._executeResume(actionLabel, actionFn, timeout);
+            return this._executeResume(actionLabel, actionFn, timeout, protectedAction);
         } else {
-            return this._executeAction(actionLabel, actionFn, timeout);
+            return this._executeAction(actionLabel, actionFn, timeout, protectedAction, forceInterrupt);
         }
     }
 
-    async stop() {
+    async stop(forced = false) {
         if (!this.executing) return;
+
+        // If action is protected and not forced, we don't interrupt.
+        if (this.currentActionProtected && !forced) {
+            console.log(`Action "${this.currentActionLabel}" is protected. Delaying interruption...`);
+            return;
+        }
+
+        if (forced) {
+            console.log(`Action "${this.currentActionLabel}" is being FORCIBLY interrupted.`);
+            this.agent.requestInterrupt();
+            this.executing = false; // Bypass the while loop deadlock
+            return;
+        }
+
         const timeout = setTimeout(() => {
             this.agent.cleanKill('Code execution refused stop after 10 seconds. Killing process.');
         }, 10000);
@@ -43,7 +58,7 @@ export class ActionManager {
         this.resume_name = null;
     }
 
-    async _executeResume(actionLabel = null, actionFn = null, timeout = 10) {
+    async _executeResume(actionLabel = null, actionFn = null, timeout = 10, protectedAction = false) {
         const new_resume = actionFn != null;
         if (new_resume) { // start new resume
             this.resume_func = actionFn;
@@ -69,14 +84,14 @@ export class ActionManager {
                     this.cancelResume();
                 }
                 if (this.recent_resume_counter > 5) {
-                    console.error('Infinite resume loop detected, shutting down to save tokens/API budget.');
-                    this.agent.cleanKill('Infinite resume loop detected, shutting down.');
+                    console.error('Infinite resume loop detected, aborting action and delegating to Task Tree.');
+                    this.agent.shutUp(); // Dừng spam LLM thay vì tắt server
                     const nowIso = new Date().toISOString();
                     return {
                         schema_version: 'v1',
                         success: false,
-                        error_code: 'execution_failed',
-                        reason: 'Infinite resume loop detected, shutting down.',
+                        error_code: 'resume_loop_detected',
+                        reason: 'Infinite resume loop detected, aborting action.',
                         telemetry: {
                             action_label: this.resume_name || actionLabel || null,
                             request_id: this.agent.current_request_id || null,
@@ -85,7 +100,7 @@ export class ActionManager {
                             started_at: nowIso,
                             finished_at: nowIso
                         },
-                        message: 'Infinite resume loop detected, shutting down.',
+                        message: 'Infinite resume loop detected, aborting action.',
                         interrupted: false,
                         timedout: false
                     };
@@ -93,7 +108,7 @@ export class ActionManager {
             }
             this.last_resume_time = Date.now();
 
-            let res = await this._executeAction(this.resume_name, this.resume_func, timeout);
+            let res = await this._executeAction(this.resume_name, this.resume_func, timeout, protectedAction);
             this.currentActionLabel = '';
             return res;
         } else {
@@ -118,7 +133,7 @@ export class ActionManager {
         }
     }
 
-    async _executeAction(actionLabel, actionFn, timeout = 10) {
+    async _executeAction(actionLabel, actionFn, timeout = 10, protectedAction = false, forceInterrupt = false) {
         let TIMEOUT;
         const startedAt = Date.now();
         try {
@@ -132,9 +147,9 @@ export class ActionManager {
             // await current action to finish (executing=false), with 10 seconds timeout
             // also tell agent.bot to stop various actions
             if (this.executing) {
-                console.log(`action "${actionLabel}" trying to interrupt current action "${this.currentActionLabel}"`);
+                console.log(`action "${actionLabel}" trying to interrupt current action "${this.currentActionLabel}"${forceInterrupt ? ' (FORCED)' : ''}`);
             }
-            await this.stop();
+            await this.stop(forceInterrupt);
 
             // clear bot logs and reset interrupt code
             this.agent.clearBotLogs();
@@ -142,6 +157,7 @@ export class ActionManager {
             this.executing = true;
             this.currentActionLabel = actionLabel;
             this.currentActionFn = actionFn;
+            this.currentActionProtected = protectedAction;
 
             // timeout in minutes
             if (timeout > 0) {

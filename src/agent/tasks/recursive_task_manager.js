@@ -16,7 +16,7 @@ export class RecursiveTaskManager {
         this.isRunning = false;
         this.isPaused = false;
         this.cooldownUntil = 0;
-        this.maxDepth = 4; // Phase 2 requirement: 4-layer hierarchy
+        this.maxDepth = settings.recursive_task_max_depth ?? 4; // Use settings if available
 
         this.loadTree();
     }
@@ -419,7 +419,7 @@ export class RecursiveTaskManager {
             return null;
         }
 
-        let match = desc.match(/\b(?:move|go|walk|travel|head)\s+to\s+(?:the\s+)?(?:nearest\s+)?([a-z0-9_ ]+?)\s+block\b/);
+        let match = desc.match(/\b(?:move|go|walk|travel|head|run|stroll)\s+to\s+(?:the\s+)?(?:nearest\s+)?([a-z0-9_ ]+?)\s+block\b/);
         if (match) {
             const itemName = this._normalizePrimitiveTarget(match[1]);
             if (itemName && mc.getBlockId(itemName) != null) {
@@ -427,7 +427,16 @@ export class RecursiveTaskManager {
             }
         }
 
-        match = desc.match(/\b(?:break|mine|dig|harvest)\s+(?:the\s+)?([a-z0-9_ ]+?)\s+block\b/);
+        // Fix: Support more survival keywords
+        match = desc.match(/\b(?:eat|consume|gobble|drink)\s+(?:the\s+)?([a-z0-9_ ]+?)\b/);
+        if (match) {
+            const itemName = this._normalizePrimitiveTarget(match[1]);
+            if (itemName && (mc.getItemId(itemName) != null || itemName.includes('food'))) {
+                return { type: 'eat_item', itemName };
+            }
+        }
+
+        match = desc.match(/\b(?:break|mine|dig|harvest|destroy|hit)\s+(?:the\s+)?([a-z0-9_ ]+?)\s+block\b/);
         if (match) {
             const itemName = this._normalizePrimitiveTarget(match[1]);
             if (itemName && mc.getBlockId(itemName) != null) {
@@ -510,9 +519,13 @@ export class RecursiveTaskManager {
                 }
                 if (primitive.type === 'attack_entity') {
                     await skills.attackNearest(bot, primitive.entityType, true);
+                    return;
+                }
+                if (primitive.type === 'eat_item') {
+                    await skills.eatFood(bot, primitive.itemName);
                 }
             },
-            { timeout }
+            { timeout, protectedAction: true }
         );
     }
 
@@ -590,7 +603,7 @@ export class RecursiveTaskManager {
 
         const handledSafety = await this.agent._runSafetyManagerIfNeeded();
         if (handledSafety) {
-            this.cooldownUntil = Date.now() + 2500;
+            this.cooldownUntil = Date.now() + 1000; // Reduced cooldown
             return false;
         }
 
@@ -659,13 +672,14 @@ export class RecursiveTaskManager {
         // Progress Timeout: snapshot bot position and inventory before execution
         let prePos = null;
         let preItemCount = 0;
+        let preInventorySnapshot = {};
         try {
             const botEntity = this.agent.bot?.entity;
             if (botEntity && botEntity.position) {
                 prePos = { x: botEntity.position.x, y: botEntity.position.y, z: botEntity.position.z };
             }
-            const inv = world.getInventoryCounts(this.agent.bot);
-            preItemCount = Object.values(inv).reduce((sum, c) => sum + c, 0);
+            preInventorySnapshot = world.getInventoryCounts(this.agent.bot);
+            preItemCount = Object.values(preInventorySnapshot).reduce((sum, c) => sum + c, 0);
         } catch (_err) {
             // Best-effort snapshot
         }
@@ -767,7 +781,10 @@ export class RecursiveTaskManager {
                     async () => {
                         generatedCode = await this.agent.coder.generateCode(tempHistory);
                     },
-                    { timeout: settings.code_timeout_mins ?? 10 }
+                    {
+                        timeout: settings.code_timeout_mins ?? 10,
+                        protectedAction: true
+                    }
                 );
             } else {
                 generatedCode = '// primitive task executor';
@@ -785,10 +802,29 @@ export class RecursiveTaskManager {
             } else {
                 const deterministicCheck = this.agent._deterministicTaskCheck(leaf);
                 if (deterministicCheck.certain && deterministicCheck.done) {
-                    leaf.status = 'done';
-                    leaf.last_error = '';
-                    leaf.last_error_code = 'none';
-                    leaf.next_attempt_after = null;
+                    // HARD VERIFICATION: For resource gathering tasks, ensure inventory actually increased
+                    const sourceTaskKeywords = ['collect', 'mine', 'gather', 'dig', 'get', 'pick', 'take', 'harvest'];
+                    const leafDescLow = this._normalizeTaskDesc(leaf.desc).toLowerCase();
+                    const isSourceTask = sourceTaskKeywords.some(kw => leafDescLow.includes(kw));
+
+                    if (isSourceTask) {
+                        const postInv = world.getInventoryCounts(this.agent.bot);
+                        const progress = Object.entries(postInv).some(([item, count]) => count > (preInventorySnapshot[item] || 0));
+                        if (!progress) {
+                            console.warn(`[HardVerify] Task "${leaf.desc}" claimed done but inventory did not increase. Forcing retry.`);
+                            await markTaskFailure(`Hard Verification: Inventory did not increase after gathering task. Bot might have missed the item entities.`);
+                        } else {
+                            leaf.status = 'done';
+                        }
+                    } else {
+                        leaf.status = 'done';
+                    }
+
+                    if (leaf.status === 'done') {
+                        leaf.last_error = '';
+                        leaf.last_error_code = 'none';
+                        leaf.next_attempt_after = null;
+                    }
                 } else if (deterministicCheck.certain && !deterministicCheck.done) {
                     await markTaskFailure(`Deterministic verifier: ${deterministicCheck.reason}`);
                 } else {

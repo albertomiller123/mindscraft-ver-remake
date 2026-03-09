@@ -779,18 +779,7 @@ export class Agent {
                 this.bot.clearControlStates();
                 this.bot.pathfinder.stop(); // clear any lingering pathfinder
                 this.bot.modes.unPauseAll();
-                setTimeout(async () => {
-                    try {
-                        if (this.isIdle()) {
-                            await this.actions.resumeAction();
-                        }
-                        if (this.isIdle()) {
-                            await this.maybeRunLongTermGoal('idle');
-                        }
-                    } catch (err) {
-                        console.error('[EventBoundary] idle setTimeout error:', err.message);
-                    }
-                }, 1000);
+                // removed setTimeout call - moved to update loop for active polling
             } catch (err) {
                 console.error('[EventBoundary] idle handler error:', err.message);
             }
@@ -913,7 +902,16 @@ export class Agent {
 
     async update(delta) {
         await this.bot.modes.update();
-        this.self_prompter.update(delta);
+
+        // Priority 1: Mission Execution (Active Loop)
+        // If a mission is running, it suppresses autonomous self-prompting to maintain focus.
+        if (this.recursive_tasks && this.recursive_tasks.isRunning && !this.recursive_tasks.isPaused) {
+            await this.maybeRunLongTermGoal('update');
+        } else {
+            // Priority 2: Self-Prompting (Autonomous Mode)
+            this.self_prompter.update(delta);
+        }
+
         await this.checkTaskDone();
     }
 
@@ -1108,7 +1106,7 @@ export class Agent {
 
     async _runSafetyManagerIfNeeded() {
         const threats = this._assessSafetyThreats();
-        if (threats.length === 0 || !this.isIdle()) {
+        if (threats.length === 0) {
             return false;
         }
 
@@ -1132,7 +1130,7 @@ export class Agent {
                     await skills.consume(this.bot, edibleItem.name);
                 }
             }
-        }, { timeout: 2 });
+        }, { timeout: 2, forceInterrupt: true });
         return true;
     }
 

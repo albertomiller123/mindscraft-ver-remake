@@ -25,12 +25,33 @@ export function lockdown() {
   });
 }
 
-export const makeCompartment = (endowments = {}) => {
+export function wrapWithInterruptCheck(bot, apiObject) {
+  const wrapped = {};
+  for (const [key, value] of Object.entries(apiObject)) {
+    if (typeof value === 'function') {
+      wrapped[key] = function (...args) {
+        if (bot && bot.interrupt_code) {
+          throw new Error('FORCED_INTERRUPT: Khẩn cấp, dừng lệnh LLM ngay lập tức!');
+        }
+        return value.apply(this, args);
+      };
+    } else if (typeof value === 'object' && value !== null) {
+      wrapped[key] = wrapWithInterruptCheck(bot, value);
+    } else {
+      wrapped[key] = value;
+    }
+  }
+  return wrapped;
+}
+
+export const makeCompartment = (bot, endowments = {}) => {
+  // Wrap standard endowments (like skills and world) to enforce forced interruptions
+  const wrappedEndowments = wrapWithInterruptCheck(bot, endowments);
   return new Compartment({
     // provide untamed Math, Date, etc
     Math,
     Date,
     // standard endowments
-    ...endowments
+    ...wrappedEndowments
   });
 }

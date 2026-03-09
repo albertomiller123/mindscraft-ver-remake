@@ -353,10 +353,11 @@ async function execute(mode, agent, func, timeout = -1) {
     if (agent.self_prompter.isActive())
         agent.self_prompter.stopLoop();
     let interrupted_action = agent.actions.currentActionLabel;
-    mode.active = true;
+    const emergencyModes = ['self_preservation', 'cowardice', 'self_defense', 'unstuck'];
+    const forceInterrupt = emergencyModes.includes(mode.name);
     let code_return = await agent.actions.runAction(`mode:${mode.name}`, async () => {
         await func();
-    }, { timeout });
+    }, { timeout, forceInterrupt });
     mode.active = false;
     console.log(`Mode ${mode.name} finished executing, code_return: ${code_return.message}`);
 

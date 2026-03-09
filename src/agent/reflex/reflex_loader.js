@@ -126,36 +126,57 @@ export class ReflexLoader {
         }
 
         try {
-            // Safety timeout wrapper for reflex handler
-            const reflexPromise = handler(bot, attackerName, amount, skills, world, Vec3);
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Reflex handler timed out')), 8000)
-            );
-            await Promise.race([reflexPromise, timeoutPromise]);
-            this._recordReflexResult(selectedThreatName, 'success');
+            // Push the reflex to Action Manager as an emergency forced action
+            // This replaces the leaky Promise.race design
+            const actionLabel = `reflex_${selectedThreatName}`;
+
+            // We don't await the `runAction` here so we don't block the caller (usually an event listener)
+            // The ActionManager will handle the timing out and interruption internally safely.
+            this.agent.actions.runAction(
+                actionLabel,
+                async () => {
+                    await handler(bot, attackerName, amount, skills, world, Vec3);
+                },
+                { timeout: 0.15, forceInterrupt: true } // ~9 seconds timeout (0.15 min)
+            ).then((result) => {
+                if (result && result.success) {
+                    this._recordReflexResult(selectedThreatName, 'success');
+                } else if (result && result.timedout) {
+                    this._recordReflexResult(selectedThreatName, 'timeout', result.reason);
+                } else {
+                    this._recordReflexResult(selectedThreatName, 'failure', result ? result.reason : 'unknown');
+                }
+            }).catch((err) => {
+                console.error('[ReflexLoader] Reflex execution failed inside ActionManager:', err.message);
+                this._recordReflexResult(selectedThreatName, 'failure', err.message);
+            });
+
         } catch (err) {
-            console.error('[ReflexLoader] Reflex execution failed or timed out:', err.message);
-            const isTimeout = (err?.message || '').toLowerCase().includes('timed out');
-            this._recordReflexResult(selectedThreatName, isTimeout ? 'timeout' : 'failure', err?.message || String(err));
+            console.error('[ReflexLoader] Failed to start reflex execution:', err.message);
+            this._recordReflexResult(selectedThreatName, 'failure', err?.message || String(err));
         }
     }
 
     async loadReflexes() {
         if (!fs.existsSync(this.reflexes_dir)) return;
 
-        this.activeReflexHandlers.clear();
         const files = fs.readdirSync(this.reflexes_dir);
-        const MAX_REFLEX_HANDLERS = 20; // Fix 3.9: Prevent memory leak from too many hot-loaded modules
-        let loaded = 0;
+        const MAX_REFLEX_HANDLERS = settings.reflex_max_active_handlers ?? 20; // Use settings if available
+        let loaded = this.activeReflexHandlers.size;
 
         for (const file of files) {
             if (!file.startsWith('reflex_') || !file.endsWith('.js')) continue;
+
+            const threatName = file.replace('reflex_', '').replace('.js', '');
+            if (this.activeReflexHandlers.has(threatName)) continue; // Already loaded
+
             if (loaded >= MAX_REFLEX_HANDLERS) {
-                console.warn(`[ReflexLoader] Max reflex handler limit (${MAX_REFLEX_HANDLERS}) reached. Skipping remaining files.`);
+                console.warn(`[ReflexLoader] Max reflex handler limit (${MAX_REFLEX_HANDLERS}) reached. Skipping: ${file}`);
+                // In Phase 7: We could implement an LRU eviction here if needed, 
+                // but for now we just respect the hard limit to prevent OOM.
                 break;
             }
 
-            const threatName = file.replace('reflex_', '').replace('.js', '');
             const fp = path.resolve(`${this.reflexes_dir}/${file}`);
 
             try {
