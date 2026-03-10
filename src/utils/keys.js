@@ -14,9 +14,15 @@ export function getKey(name) {
         key = process.env[name];
     }
     if (!key) {
-        throw new Error(`API key "${name}" not found in keys.json or environment variables!`);
+        // Sanitized error: don't leak key name in production logs
+        const sanitized = process.env.NODE_ENV === 'production' ? 'API_KEY' : name;
+        throw new Error(`API key "${sanitized}" not found in keys.json or environment variables!`);
     }
-    return key;
+    // Validate key is non-empty string
+    if (typeof key !== 'string' || key.trim().length === 0) {
+        throw new Error('API key is invalid (empty or non-string)');
+    }
+    return key.trim();
 }
 
 export function hasKey(name) {

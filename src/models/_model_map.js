@@ -31,8 +31,15 @@ const apiMap = await (async () => {
 })();
 
 export function selectAPI(profile) {
+    // Input validation
+    if (!profile) {
+        throw new Error('Profile is required');
+    }
     if (typeof profile === 'string' || profile instanceof String) {
         profile = {model: profile};
+    }
+    if (typeof profile !== 'object') {
+        throw new Error('Profile must be string or object');
     }
     // backwards compatibility with local->ollama
     if (profile.api?.includes('local') || profile.model?.includes('local')) {
@@ -64,7 +71,7 @@ export function selectAPI(profile) {
                 profile.api = 'qwen';
         }
         if (!profile.api) {
-            throw new Error('Unknown model:', profile.model);
+            throw new Error(`Unknown model: ${profile.model || 'undefined'}`);
         }
     }
     if (!apiMap[profile.api]) {

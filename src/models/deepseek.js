@@ -50,10 +50,26 @@ export class DeepSeek {
         return res;
     }
 
+    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+        const imageMessages = [...messages];
+        imageMessages.push({
+            role: "user",
+            content: [
+                { type: "text", text: systemMessage },
+                {
+                    type: "image_url",
+                    image_url: {
+                        url: `data:image/jpeg;base64,${imageBuffer.toString('base64')}`
+                    }
+                }
+            ]
+        });
+        
+        return this.sendRequest(imageMessages, systemMessage);
+    }
+
     async embed(text) {
         throw new Error('Embeddings are not supported by Deepseek.');
     }
 }
-
-
 
