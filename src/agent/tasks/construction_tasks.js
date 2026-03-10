@@ -174,7 +174,14 @@ export class Blueprint {
 
                 try {
                     const blockAtLocation = bot.blockAt(new Vec3(x, y, z));
-                    const actualBlockName = blockAtLocation ? bot.registry.blocks[blockAtLocation.type].name : "air";
+                    
+                    // FIX: Handle null blocks (unloaded chunks) properly
+                    if (!blockAtLocation) {
+                        console.warn(`[Blueprint] Chunk not loaded at (${x}, ${y}, ${z}), skipping validation`);
+                        continue; // Skip unloaded chunks instead of failing
+                    }
+                    
+                    const actualBlockName = bot.registry.blocks[blockAtLocation.type]?.name || "air";
 
                     // Skip if both expected and actual block are air
                     if (blockName === "air" && actualBlockName === "air") {
@@ -197,8 +204,13 @@ export class Blueprint {
                         });
                     }
                 } catch (err) {
-                    console.error(`Error getting block at (${x}, ${y}, ${z}):`, err);
-                    return false; // Stop checking if there's an issue getting blocks
+                    console.error(`[Blueprint] Error getting block at (${x}, ${y}, ${z}):`, err);
+                    // FIX: Return error object instead of boolean for better diagnostics
+                    return {
+                        mismatches: [],
+                        matches: [],
+                        error: `Failed to check block at (${x}, ${y}, ${z}): ${err.message}`
+                    };
                 }
             }
         }

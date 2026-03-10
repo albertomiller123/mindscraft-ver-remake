@@ -6,24 +6,47 @@ import { CookingTaskInitiator } from './cooking_tasks.js';
 
 const PROGRESS_FILE = './hells_kitchen_progress.json';
 
+// FIX: Use in-memory state instead of file-based to prevent race conditions
+let _inMemoryProgress = { taskId: null, agent0Complete: false, agent1Complete: false };
+let _progressFileLock = false; // Simple lock flag
+
 const hellsKitchenProgressManager = {
     readProgress: function () {
+        // FIX: Read from memory first, fall back to file for persistence
+        if (_inMemoryProgress.taskId) {
+            return { ..._inMemoryProgress };
+        }
+        
         try {
             if (existsSync(PROGRESS_FILE)) {
                 const data = readFileSync(PROGRESS_FILE, 'utf8');
-                return JSON.parse(data);
+                const parsed = JSON.parse(data);
+                _inMemoryProgress = parsed; // Sync to memory
+                return parsed;
             }
         } catch (err) {
-            console.error('Error reading progress file:', err);
+            console.error('[HellsKitchen] Error reading progress file:', err);
+            // FIX: Don't crash, return safe default
         }
         return { taskId: null, agent0Complete: false, agent1Complete: false };
     },
 
-    writeProgress: function (progress) {
+    writeProgress: async function (progress) {
+        // FIX: Update memory immediately, debounce file writes
+        _inMemoryProgress = { ...progress };
+        
+        // Simple spinlock to prevent concurrent writes
+        while (_progressFileLock) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        _progressFileLock = true;
+        
         try {
-            writeFileSync(PROGRESS_FILE, JSON.stringify(progress), 'utf8');
+            writeFileSync(PROGRESS_FILE, JSON.stringify(progress, null, 2), 'utf8');
         } catch (err) {
-            console.error('Error writing progress file:', err);
+            console.error('[HellsKitchen] Error writing progress file:', err);
+        } finally {
+            _progressFileLock = false;
         }
     },
 

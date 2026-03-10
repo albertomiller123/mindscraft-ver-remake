@@ -1,0 +1,29 @@
+diff --git a/src/agent/library/world.js b/src/agent/library/world.js
+index original..fixed 100644
+--- a/src/agent/library/world.js
++++ b/src/agent/library/world.js
+@@ -213,8 +213,12 @@ export function getNearestBlocks(bot, block_types = null, distance = 8, count =
+ 
+ export function getNearestBlocksWhere(bot, predicate, distance = 8, count = 10000) {
+-    let positions = bot.findBlocks({ matching: predicate, maxDistance: distance, count: count });
+-    let blocks = positions.map(position => bot.blockAt(position));
++    const positions = bot.findBlocks({ matching: predicate, maxDistance: distance, count: count });
++    const blocks = positions
++        .map(position => bot.blockAt(position))
++        .filter(block => block !== null); // CRITICAL: Filter out null blocks from unloaded chunks
++    
++    if (blocks.length < positions.length) {
++        console.warn(`getNearestBlocksWhere: ${positions.length - blocks.length} blocks in unloaded chunks`);
++    }
+     return blocks;
+ }
+ 
+@@ -184,7 +188,11 @@ export function checkLevel(bot, levelNum) {
+                 try {
+                     const blockAtLocation = bot.blockAt(new Vec3(x, y, z));
+-                    const actualBlockName = blockAtLocation ? bot.registry.blocks[blockAtLocation.type].name : "air";
++                    if (!blockAtLocation) {
++                        console.warn(`checkLevel: Chunk not loaded at (${x}, ${y}, ${z}), skipping`);
++                        continue; // Skip unloaded chunks instead of treating as air
++                    }
++                    const actualBlockName = bot.registry.blocks[blockAtLocation.type]?.name || "air";

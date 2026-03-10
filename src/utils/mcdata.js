@@ -440,7 +440,23 @@ function isBaseItem(item) {
     return loopingItems.has(item) || getItemCraftingRecipes(item) === null;
 }
 
-function craftItem(item, count, inventory, leftovers, crafted = { required: {}, steps: [], leftovers: {} }) {
+function craftItem(item, count, inventory, leftovers, crafted = { required: {}, steps: [], leftovers: {} }, depth = 0, visitedItems = new Set()) {
+    // FIX: Prevent stack overflow from infinite recursion
+    const MAX_DEPTH = 50;
+    if (depth > MAX_DEPTH) {
+        console.warn(`[mcdata] Max crafting depth (${MAX_DEPTH}) reached for ${item}, treating as base item`);
+        crafted.required[item] = (crafted.required[item] || 0) + count;
+        return crafted;
+    }
+    
+    // FIX: Detect circular dependencies
+    if (visitedItems.has(item)) {
+        console.warn(`[mcdata] Circular dependency detected for ${item}, treating as base item`);
+        crafted.required[item] = (crafted.required[item] || 0) + count;
+        return crafted;
+    }
+    visitedItems.add(item);
+    
     // Check available inventory and leftovers first
     const availableInv = inventory[item] || 0;
     const availableLeft = leftovers[item] || 0;
@@ -455,6 +471,7 @@ function craftItem(item, count, inventory, leftovers, crafted = { required: {}, 
         if (remainingNeeded > 0) {
             inventory[item] = availableInv - remainingNeeded;
         }
+        visitedItems.delete(item); // Clean up before return
         return crafted;
     }
 
@@ -465,12 +482,14 @@ function craftItem(item, count, inventory, leftovers, crafted = { required: {}, 
 
     if (isBaseItem(item)) {
         crafted.required[item] = (crafted.required[item] || 0) + stillNeeded;
+        visitedItems.delete(item);
         return crafted;
     }
 
     const recipe = getItemCraftingRecipes(item)?.[0];
     if (!recipe) {
         crafted.required[item] = stillNeeded;
+        visitedItems.delete(item);
         return crafted;
     }
 
@@ -484,11 +503,13 @@ function craftItem(item, count, inventory, leftovers, crafted = { required: {}, 
         leftovers[item] = (leftovers[item] || 0) + (totalProduced - stillNeeded);
     }
 
-    // Process each ingredient
+    // Process each ingredient (with depth tracking)
     for (const [ingredientName, ingredientCount] of Object.entries(ingredients)) {
         const totalIngredientNeeded = ingredientCount * batchCount;
-        craftItem(ingredientName, totalIngredientNeeded, inventory, leftovers, crafted);
+        craftItem(ingredientName, totalIngredientNeeded, inventory, leftovers, crafted, depth + 1, new Set(visitedItems));
     }
+    
+    visitedItems.delete(item); // Clean up
 
     // Add crafting step
     const stepIngredients = Object.entries(ingredients)

@@ -12,6 +12,8 @@ export function getItemId(itemName) {
 
 // TTL cache for expensive per-tick world queries
 const _cache = new Map();
+const MAX_CACHE_SIZE = 1000; // Prevent memory leak
+
 function _getCached(key) {
     const entry = _cache.get(key);
     if (!entry) return null;
@@ -21,9 +23,25 @@ function _getCached(key) {
     }
     return entry.value;
 }
+
 function _setCached(key, value, ttlMs) {
+    // FIX: Evict old entries when cache grows too large
+    if (_cache.size >= MAX_CACHE_SIZE) {
+        const oldestKey = _cache.keys().next().value;
+        _cache.delete(oldestKey);
+    }
     _cache.set(key, { value, ts: Date.now(), ttl: ttlMs });
 }
+
+// Periodic cleanup to remove expired entries
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of _cache.entries()) {
+        if (now - entry.ts > entry.ttl) {
+            _cache.delete(key);
+        }
+    }
+}, 60000); // Clean up every 60 seconds
 
 function logWorldAction(bot, message) {
     if (bot && typeof bot.output === 'string') {
@@ -197,8 +215,15 @@ export function getNearestBlocksWhere(bot, predicate, distance = 8, count = 1000
      * @example
      * let waterBlocks = world.getNearestBlocksWhere(bot, block => block.name === 'water', 16, 10);
      **/
-    let positions = bot.findBlocks({ matching: predicate, maxDistance: distance, count: count });
-    let blocks = positions.map(position => bot.blockAt(position));
+    const positions = bot.findBlocks({ matching: predicate, maxDistance: distance, count: count });
+    // FIX: Filter out null blocks from unloaded chunks
+    const blocks = positions
+        .map(position => bot.blockAt(position))
+        .filter(block => block !== null);
+    
+    if (blocks.length < positions.length) {
+        console.warn(`[world] ${positions.length - blocks.length} blocks in unloaded chunks, skipped`);
+    }
     return blocks;
 }
 
@@ -444,8 +469,9 @@ export function getNearbyBlockTypes(bot, distance = 16) {
 
     let blocks = getNearestBlocks(bot, null, distance);
     let found = [];
+    // FIX: Add null check for blocks[i]
     for (let i = 0; i < blocks.length; i++) {
-        if (!found.includes(blocks[i].name)) {
+        if (blocks[i] && blocks[i].name && !found.includes(blocks[i].name)) {
             found.push(blocks[i].name);
         }
     }

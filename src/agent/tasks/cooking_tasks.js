@@ -221,17 +221,22 @@ export class CookingTaskInitiator {
 
     async plantCrops (xStart, zStart, crop_and_age, till=true) {
         const position = getPosition(this.bot);
-        for (let i = 0; i < 6; i++) {
-            for (let j = 0; j < 6; j++) {
-                const x = xStart + i;
-                const z = zStart + j;
-                if (till) {
-                    await this.bot.chat(`/setblock ${x} ${position.y - 1} ${z} farmland`);
+        try {
+            for (let i = 0; i < 6; i++) {
+                for (let j = 0; j < 6; j++) {
+                    const x = xStart + i;
+                    const z = zStart + j;
+                    if (till) {
+                        await this.bot.chat(`/setblock ${x} ${position.y - 1} ${z} farmland`);
+                    }
+                    await this.bot.chat(`/setblock ${x} ${position.y} ${z} ${crop_and_age}`);
                 }
-                await this.bot.chat(`/setblock ${x} ${position.y} ${z} ${crop_and_age}`);
             }
+            await new Promise(resolve => setTimeout(resolve, 300));
+        } catch (err) {
+            console.error(`[CookingTask] plantCrops failed: ${err.message}`);
+            throw new Error(`Failed to plant crops at (${xStart}, ${zStart}): ${err.message}`);
         }
-        await new Promise(resolve => setTimeout(resolve, 300));
     }
 
     async plantSugarCane (patches) {
