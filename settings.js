@@ -22,7 +22,7 @@ const settings = {
         // "./profiles/mercury.json",
         // "./profiles/andy-4.json", // Supports up to 75 messages!
         // "./profiles/freeguy.json",
-        "./profiles/quangdz.json",
+        // "./profiles/gpt.json",
         // using more than 1 profile requires you to /msg each bot indivually
         // individual profiles override values from the base profile
     ],

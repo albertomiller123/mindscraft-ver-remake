@@ -9,6 +9,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { selectAPI, createModel } from './_model_map.js';
+import { safeProfileMerge, sanitizeFilePath, safeJsonParse } from '../utils/profile_validator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,7 +18,19 @@ export class Prompter {
     constructor(agent, profile) {
         this.agent = agent;
         this.profile = profile;
-        let default_profile = JSON.parse(readFileSync('./profiles/defaults/_default.json', 'utf8'));
+        
+        // Safe profile loading with path validation
+        const defaultPath = sanitizeFilePath('./profiles/defaults/_default.json');
+        if (!defaultPath.valid) {
+            throw new Error(`Invalid default profile path: ${defaultPath.error}`);
+        }
+        
+        const defaultJson = safeJsonParse(readFileSync(defaultPath.sanitized, 'utf8'), '_default.json');
+        if (!defaultJson.success) {
+            throw new Error(`Failed to parse default profile: ${defaultJson.error}`);
+        }
+        let default_profile = defaultJson.data;
+        
         let base_fp = '';
         if (settings.base_profile.includes('survival')) {
             base_fp = './profiles/defaults/survival.json';
@@ -28,18 +41,22 @@ export class Prompter {
         } else if (settings.base_profile.includes('god_mode')) {
             base_fp = './profiles/defaults/god_mode.json';
         }
-        let base_profile = JSON.parse(readFileSync(base_fp, 'utf8'));
+        
+        const basePath = sanitizeFilePath(base_fp);
+        if (!basePath.valid) {
+            throw new Error(`Invalid base profile path: ${basePath.error}`);
+        }
+        
+        const baseJson = safeJsonParse(readFileSync(basePath.sanitized, 'utf8'), base_fp);
+        if (!baseJson.success) {
+            throw new Error(`Failed to parse base profile: ${baseJson.error}`);
+        }
+        let base_profile = baseJson.data;
 
-        // first use defaults to fill in missing values in the base profile
-        for (let key in default_profile) {
-            if (base_profile[key] === undefined)
-                base_profile[key] = default_profile[key];
-        }
-        // then use base profile to fill in missing values in the individual profile
-        for (let key in base_profile) {
-            if (this.profile[key] === undefined)
-                this.profile[key] = base_profile[key];
-        }
+        // Safe profile merging with prototype pollution protection
+        base_profile = safeProfileMerge({}, default_profile);
+        base_profile = safeProfileMerge(base_profile, baseJson.data);
+        this.profile = safeProfileMerge(base_profile, this.profile);
         // base overrides default, individual overrides base
 
         this.convo_examples = null;

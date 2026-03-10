@@ -3,6 +3,7 @@ import settings from './settings.js';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { readFileSync } from 'fs';
+import { sanitizeFilePath, safeJsonParse, validateProfile } from './src/utils/profile_validator.js';
 
 function parseArguments() {
     return yargs(hideBin(process.argv))
@@ -71,17 +72,42 @@ if (!settings.profiles || settings.profiles.length === 0) {
 }
 
 for (let profile of settings.profiles) {
+    // Validate and sanitize profile path
+    const pathValidation = sanitizeFilePath(profile);
+    if (!pathValidation.valid) {
+        console.error(`Error: Invalid profile path '${profile}': ${pathValidation.error}`);
+        process.exit(1);
+    }
+    
     let profile_json;
     try {
-        profile_json = JSON.parse(readFileSync(profile, 'utf8'));
+        const fileContent = readFileSync(pathValidation.sanitized, 'utf8');
+        const jsonResult = safeJsonParse(fileContent, profile);
+        
+        if (!jsonResult.success) {
+            console.error(`Error: Failed to parse profile '${profile}': ${jsonResult.error}`);
+            process.exit(1);
+        }
+        
+        profile_json = jsonResult.data;
     } catch (err) {
         console.error(`Error: Failed to load profile '${profile}': ${err.message}`);
         process.exit(1);
     }
+    
+    // Validate profile structure
+    const validation = validateProfile(profile_json);
+    if (!validation.valid) {
+        console.error(`Error: Profile '${profile}' validation failed:`);
+        validation.errors.forEach(err => console.error(`  - ${err}`));
+        process.exit(1);
+    }
+    
     if (!profile_json.name) {
         console.error(`Error: Profile '${profile}' is missing required 'name' field.`);
         process.exit(1);
     }
+    
     settings.profile = profile_json;
     Mindcraft.createAgent(settings);
 }
